@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, Alert } from "react-native";
-import { useEvent, useEventListener } from "expo";
+import { useEvent } from "expo";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { connect, getSocket, disconnect } from "../services/socket";
 
@@ -9,22 +9,11 @@ export default function RoomScreen({ route, navigation }) {
   const videoViewRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isSyncing, setIsSyncing] = useState(true);
-  const isSeeking = useRef(false);
   const player = useVideoPlayer(videoUrl, (p) => {
     p.loop = false;
   });
 
   const { status } = useEvent(player, "statusChange", { status: player.status });
-  useEventListener(player, "playingChange", (e) => {
-    setIsPlaying(e.isPlaying);
-  });
-
-  const sendPositionSync = useCallback(() => {
-    const socket = getSocket();
-    if (socket && isOwner) {
-      socket.emit("seek", { roomCode, position: player.currentTime });
-    }
-  }, [isOwner, roomCode]);
 
   useEffect(() => {
     const socket = connect();
@@ -48,9 +37,7 @@ export default function RoomScreen({ route, navigation }) {
 
     socket.on("play", (position) => {
       if (position > 0) {
-        isSeeking.current = true;
         player.currentTime = position;
-        setTimeout(() => { isSeeking.current = false; }, 300);
       }
       player.play();
       setIsPlaying(true);
@@ -58,18 +45,10 @@ export default function RoomScreen({ route, navigation }) {
 
     socket.on("pause", (position) => {
       if (position > 0) {
-        isSeeking.current = true;
         player.currentTime = position;
-        setTimeout(() => { isSeeking.current = false; }, 300);
       }
       player.pause();
       setIsPlaying(false);
-    });
-
-    socket.on("seek", (position) => {
-      isSeeking.current = true;
-      player.currentTime = position;
-      setTimeout(() => { isSeeking.current = false; }, 300);
     });
 
     socket.on("user-joined", () => {
@@ -80,7 +59,6 @@ export default function RoomScreen({ route, navigation }) {
       socket.off("sync-state");
       socket.off("play");
       socket.off("pause");
-      socket.off("seek");
       socket.off("user-joined");
       disconnect();
     };
@@ -95,23 +73,14 @@ export default function RoomScreen({ route, navigation }) {
     }
   }, [isSyncing, status]);
 
-  useEffect(() => {
-    if (!isOwner || isSyncing) return;
-    const interval = setInterval(() => {
-      sendPositionSync();
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [isOwner, isSyncing, sendPositionSync]);
-
   const togglePlayback = useCallback(() => {
     const socket = getSocket();
+    const pos = player.currentTime;
     if (player.playing) {
-      const pos = player.currentTime;
       player.pause();
       setIsPlaying(false);
       if (socket) socket.emit("pause", { roomCode, position: pos });
     } else {
-      const pos = player.currentTime;
       player.play();
       setIsPlaying(true);
       if (socket) socket.emit("play", { roomCode, position: pos });
