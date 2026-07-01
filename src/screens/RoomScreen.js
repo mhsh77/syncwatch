@@ -76,7 +76,7 @@ export default function RoomScreen({ route, navigation }) {
   const togglePlayback = useCallback(() => {
     const socket = getSocket();
     const pos = player.currentTime;
-    if (player.playing) {
+    if (isPlaying) {
       player.pause();
       setIsPlaying(false);
       if (socket) socket.emit("pause", { roomCode, position: pos });
@@ -85,7 +85,7 @@ export default function RoomScreen({ route, navigation }) {
       setIsPlaying(true);
       if (socket) socket.emit("play", { roomCode, position: pos });
     }
-  }, [player, roomCode]);
+  }, [isPlaying, player, roomCode]);
 
   return (
     <View style={styles.container}>
