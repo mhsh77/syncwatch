@@ -64,8 +64,10 @@ export default function RoomScreen({ route, navigation }) {
     };
   }, []);
 
+  const hasAutoPlayed = useRef(false);
   useEffect(() => {
-    if (isOwner && !isSyncing && status === "readyToPlay") {
+    if (isOwner && !isSyncing && status === "readyToPlay" && !hasAutoPlayed.current) {
+      hasAutoPlayed.current = true;
       player.play();
       setIsPlaying(true);
       const socket = getSocket();
