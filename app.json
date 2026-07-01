@@ -15,10 +15,24 @@
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+      },
+      "package": "com.mhsh.SyncWatch"
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-video",
+        {
+          "supportsBackgroundPlayback": true
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "563e6426-e5d5-4223-b9f9-d09640eaef07"
+      }
     }
   }
 }
