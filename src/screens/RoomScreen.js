@@ -9,11 +9,23 @@ export default function RoomScreen({ route, navigation }) {
   const videoViewRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isSyncing, setIsSyncing] = useState(true);
+  const [subtitleTracks, setSubtitleTracks] = useState([]);
+  const [subtitleOn, setSubtitleOn] = useState(false);
   const player = useVideoPlayer(videoUrl, (p) => {
     p.loop = false;
   });
 
   const { status } = useEvent(player, "statusChange", { status: player.status });
+
+  useEventListener(player, "availableSubtitleTracksChange", (e) => {
+    setSubtitleTracks(e.availableSubtitleTracks || []);
+  });
+
+  useEventListener(player, "sourceLoad", (e) => {
+    if (e.availableSubtitleTracks) {
+      setSubtitleTracks(e.availableSubtitleTracks);
+    }
+  });
 
   useEffect(() => {
     const socket = connect();
@@ -89,6 +101,16 @@ export default function RoomScreen({ route, navigation }) {
     }
   }, [isPlaying, player, roomCode]);
 
+  const toggleSubtitles = useCallback(() => {
+    if (subtitleOn) {
+      player.subtitleTrack = null;
+      setSubtitleOn(false);
+    } else if (subtitleTracks.length > 0) {
+      player.subtitleTrack = subtitleTracks[0];
+      setSubtitleOn(true);
+    }
+  }, [subtitleOn, subtitleTracks]);
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -116,6 +138,15 @@ export default function RoomScreen({ route, navigation }) {
         >
           <Text style={styles.controlText}>{isPlaying ? "Pause" : "Play"}</Text>
         </TouchableOpacity>
+
+        {subtitleTracks.length > 0 && (
+          <TouchableOpacity
+            style={[styles.subtitleButton, subtitleOn && styles.subtitleActive]}
+            onPress={toggleSubtitles}
+          >
+            <Text style={styles.subtitleText}>CC</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <Text style={styles.hint}>
@@ -179,6 +210,23 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 18,
     fontWeight: "bold",
+  },
+  subtitleButton: {
+    marginTop: 12,
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+    backgroundColor: "#333",
+    alignItems: "center",
+  },
+  subtitleActive: {
+    backgroundColor: "#6C5CE7",
+  },
+  subtitleText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "bold",
+    letterSpacing: 1,
   },
   hint: {
     color: "#555",
