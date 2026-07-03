@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Alert } from "react-native";
-import { useEvent } from "expo";
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from "react-native";
+import { useEvent, useEventListener } from "expo";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { connect, getSocket, disconnect } from "../services/socket";
 
@@ -9,23 +9,36 @@ export default function RoomScreen({ route, navigation }) {
   const videoViewRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isSyncing, setIsSyncing] = useState(true);
-  const [subtitleTracks, setSubtitleTracks] = useState([]);
+  const [subtitleUrl, setSubtitleUrl] = useState("");
   const [subtitleOn, setSubtitleOn] = useState(false);
+  const videoContainerRef = useRef(null);
   const player = useVideoPlayer(videoUrl, (p) => {
     p.loop = false;
   });
 
   const { status } = useEvent(player, "statusChange", { status: player.status });
 
-  useEventListener(player, "availableSubtitleTracksChange", (e) => {
-    setSubtitleTracks(e.availableSubtitleTracks || []);
+  useEventListener(player, "sourceLoad", () => {
+    setSubtitleOn(false);
   });
 
-  useEventListener(player, "sourceLoad", (e) => {
-    if (e.availableSubtitleTracks) {
-      setSubtitleTracks(e.availableSubtitleTracks);
-    }
-  });
+  const loadExternalSubtitle = useCallback(() => {
+    if (!subtitleUrl.trim()) return;
+    if (!videoContainerRef.current) return;
+    const video = videoContainerRef.current.querySelector("video");
+    if (!video) return;
+    const existing = video.querySelector("track");
+    if (existing) existing.remove();
+    const track = document.createElement("track");
+    track.kind = "subtitles";
+    track.src = subtitleUrl.trim();
+    track.srclang = "en";
+    track.label = "External";
+    track.default = true;
+    video.appendChild(track);
+    video.textTracks[0].mode = "showing";
+    setSubtitleOn(true);
+  }, [subtitleUrl]);
 
   useEffect(() => {
     const socket = connect();
@@ -101,16 +114,6 @@ export default function RoomScreen({ route, navigation }) {
     }
   }, [isPlaying, player, roomCode]);
 
-  const toggleSubtitles = useCallback(() => {
-    if (subtitleOn) {
-      player.subtitleTrack = null;
-      setSubtitleOn(false);
-    } else if (subtitleTracks.length > 0) {
-      player.subtitleTrack = subtitleTracks[0];
-      setSubtitleOn(true);
-    }
-  }, [subtitleOn, subtitleTracks]);
-
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -118,7 +121,7 @@ export default function RoomScreen({ route, navigation }) {
         <Text style={styles.roleLabel}>{isOwner ? "Owner" : "Joined"}</Text>
       </View>
 
-      <View style={styles.videoContainer}>
+      <View style={styles.videoContainer} ref={videoContainerRef}>
         <VideoView
           ref={videoViewRef}
           player={player}
@@ -129,24 +132,50 @@ export default function RoomScreen({ route, navigation }) {
       </View>
 
       <View style={styles.controls}>
-        <TouchableOpacity
-          style={[
-            styles.controlButton,
-            isPlaying ? styles.pauseButton : styles.playButton,
-          ]}
-          onPress={togglePlayback}
-        >
-          <Text style={styles.controlText}>{isPlaying ? "Pause" : "Play"}</Text>
-        </TouchableOpacity>
-
-        {subtitleTracks.length > 0 && (
+        <View style={styles.controlsRow}>
           <TouchableOpacity
-            style={[styles.subtitleButton, subtitleOn && styles.subtitleActive]}
-            onPress={toggleSubtitles}
+            style={[
+              styles.controlButton,
+              isPlaying ? styles.pauseButton : styles.playButton,
+            ]}
+            onPress={togglePlayback}
           >
-            <Text style={styles.subtitleText}>CC</Text>
+            <Text style={styles.controlText}>{isPlaying ? "Pause" : "Play"}</Text>
           </TouchableOpacity>
-        )}
+
+          <TouchableOpacity
+            style={[styles.ccButton, subtitleOn && styles.ccActive]}
+            onPress={() => {
+              if (subtitleOn) {
+                const v = videoContainerRef.current?.querySelector("video");
+                if (v && v.textTracks[0]) v.textTracks[0].mode = "hidden";
+                setSubtitleOn(false);
+              } else {
+                const v = videoContainerRef.current?.querySelector("video");
+                if (v && v.textTracks[0]) v.textTracks[0].mode = "showing";
+                else loadExternalSubtitle();
+                setSubtitleOn(true);
+              }
+            }}
+          >
+            <Text style={styles.ccText}>CC</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.subtitleRow}>
+          <TextInput
+            style={styles.subtitleInput}
+            placeholder="Subtitle .vtt URL (optional)"
+            placeholderTextColor="#555"
+            value={subtitleUrl}
+            onChangeText={setSubtitleUrl}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <TouchableOpacity style={styles.loadBtn} onPress={loadExternalSubtitle}>
+            <Text style={styles.loadBtnText}>Load</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <Text style={styles.hint}>
@@ -191,8 +220,14 @@ const styles = StyleSheet.create({
   },
   controls: {
     paddingHorizontal: 20,
-    paddingVertical: 24,
+    paddingVertical: 16,
     alignItems: "center",
+  },
+  controlsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 12,
   },
   controlButton: {
     borderRadius: 30,
@@ -211,22 +246,49 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "bold",
   },
-  subtitleButton: {
-    marginTop: 12,
+  ccButton: {
     borderRadius: 8,
     paddingVertical: 8,
-    paddingHorizontal: 20,
+    paddingHorizontal: 14,
     backgroundColor: "#333",
     alignItems: "center",
   },
-  subtitleActive: {
+  ccActive: {
     backgroundColor: "#6C5CE7",
   },
-  subtitleText: {
+  ccText: {
     color: "#fff",
     fontSize: 14,
     fontWeight: "bold",
     letterSpacing: 1,
+  },
+  subtitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    width: "100%",
+  },
+  subtitleInput: {
+    flex: 1,
+    backgroundColor: "#1a1a1a",
+    color: "#ccc",
+    borderRadius: 8,
+    padding: 10,
+    fontSize: 13,
+    borderWidth: 1,
+    borderColor: "#333",
+  },
+  loadBtn: {
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    backgroundColor: "#6C5CE7",
+    alignItems: "center",
+  },
+  loadBtnText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "bold",
   },
   hint: {
     color: "#555",
