@@ -18,27 +18,62 @@ export default function RoomScreen({ route, navigation }) {
 
   const { status } = useEvent(player, "statusChange", { status: player.status });
 
-  useEventListener(player, "sourceLoad", () => {
-    setSubtitleOn(false);
-  });
-
-  const loadExternalSubtitle = useCallback(() => {
-    if (!subtitleUrl.trim()) return;
-    if (!videoContainerRef.current) return;
+  const applyTrack = useCallback((url) => {
+    if (!videoContainerRef.current) return false;
     const video = videoContainerRef.current.querySelector("video");
-    if (!video) return;
+    if (!video) return false;
     const existing = video.querySelector("track");
     if (existing) existing.remove();
     const track = document.createElement("track");
     track.kind = "subtitles";
-    track.src = subtitleUrl.trim();
+    track.src = url;
     track.srclang = "en";
-    track.label = "External";
+    track.label = "Subtitle";
     track.default = true;
     video.appendChild(track);
     video.textTracks[0].mode = "showing";
+    setSubtitleUrl(url);
     setSubtitleOn(true);
-  }, [subtitleUrl]);
+    return true;
+  }, []);
+
+  const loadExternalSubtitle = useCallback(() => {
+    if (!subtitleUrl.trim()) return;
+    applyTrack(subtitleUrl.trim());
+  }, [subtitleUrl, applyTrack]);
+
+  const autoDetectSubtitle = useCallback(async () => {
+    const base = videoUrl.replace(/\.[^.]+$/, "");
+    const candidates = [
+      base + ".vtt",
+      base + ".srt",
+      base + ".persian.srt",
+      base + ".fa.srt",
+      base + "_fa.srt",
+      base + ".en.srt",
+    ];
+    for (const url of candidates) {
+      try {
+        const res = await fetch(url, { method: "HEAD" });
+        if (res.ok) {
+          applyTrack(url);
+          return;
+        }
+      } catch (_) {}
+    }
+  }, [videoUrl, applyTrack]);
+
+  useEffect(() => {
+    if (status !== "readyToPlay") return;
+    setSubtitleOn(false);
+    const timer = setInterval(() => {
+      if (videoContainerRef.current?.querySelector("video")) {
+        clearInterval(timer);
+        autoDetectSubtitle();
+      }
+    }, 200);
+    return () => clearInterval(timer);
+  }, [status]);
 
   useEffect(() => {
     const socket = connect();
