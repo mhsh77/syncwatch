@@ -29,7 +29,7 @@ export default function RoomScreen({ route, navigation }) {
 
   const { status } = useEvent(player, "statusChange", { status: player.status });
 
-  useEvent(player, "timeUpdate", (e) => {
+  useEventListener(player, "timeUpdate", (e) => {
     setCurrentTime(e.currentTime);
     if (e.currentTime > 0) setDuration(player.duration || 0);
   });
@@ -53,6 +53,8 @@ export default function RoomScreen({ route, navigation }) {
     return true;
   }, []);
 
+  const API = "http://109.122.250.39:3001";
+
   const loadExternalSubtitle = useCallback(() => {
     if (!subtitleUrl.trim()) return;
     applyTrack(subtitleUrl.trim());
@@ -70,13 +72,13 @@ export default function RoomScreen({ route, navigation }) {
       reader.onload = async () => {
         const base64 = reader.result.split(",")[1];
         try {
-          const res = await fetch("/upload-subtitle", {
+          const res = await fetch(API + "/upload-subtitle", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ roomCode, fileName: file.name, content: base64 }),
           });
           const data = await res.json();
-          applyTrack(data.url);
+          applyTrack(API + data.url);
           setSubtitleUrl(file.name);
         } catch (_) {
           Alert.alert("Error", "Failed to upload subtitle");
@@ -140,7 +142,7 @@ export default function RoomScreen({ route, navigation }) {
     });
 
     socket.on("subtitle-loaded", (url) => {
-      if (Platform.OS === "web") applyTrack(url);
+      if (Platform.OS === "web") applyTrack(API + url);
     });
 
     socket.on("user-joined", () => {
@@ -183,17 +185,18 @@ export default function RoomScreen({ route, navigation }) {
   }, [isPlaying, player, roomCode]);
 
   const handleSeek = useCallback((e) => {
-    if (!seekBarRef.current || !duration) return;
-    seekBarRef.current.measure((x, y, w, h, pageX, pageY) => {
-      const clientX = "touches" in e.nativeEvent ? e.nativeEvent.touches[0].clientX : e.nativeEvent.clientX || pageX;
-      const rect = seekBarRef.current.getBoundingClientRect();
-      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      const pos = ratio * duration;
-      player.currentTime = pos;
-      setCurrentTime(pos);
-      const socket = getSocket();
-      if (socket) socket.emit("seek", { roomCode, position: pos });
-    });
+    if (!duration) return;
+    const bar = seekBarRef.current;
+    if (!bar) return;
+    const rect = bar.getBoundingClientRect();
+    const clientX = e?.nativeEvent?.touches?.[0]?.clientX ?? e?.nativeEvent?.clientX ?? e?.clientX;
+    if (clientX == null) return;
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const pos = ratio * duration;
+    player.currentTime = pos;
+    setCurrentTime(pos);
+    const socket = getSocket();
+    if (socket) socket.emit("seek", { roomCode, position: pos });
   }, [duration, player, roomCode]);
 
   const progress = duration > 0 ? currentTime / duration : 0;
@@ -212,6 +215,7 @@ export default function RoomScreen({ route, navigation }) {
           style={styles.video}
           nativeControls={false}
           contentFit="contain"
+          crossOrigin="anonymous"
         />
       </View>
 
@@ -220,6 +224,10 @@ export default function RoomScreen({ route, navigation }) {
         <View
           ref={seekBarRef}
           style={styles.seekTrack}
+          onClick={handleSeek}
+          onMouseDown={handleSeek}
+          onTouchStart={handleSeek}
+          onTouchMove={handleSeek}
           onStartShouldSetResponder={() => true}
           onMoveShouldSetResponder={() => true}
           onResponderGrant={handleSeek}
