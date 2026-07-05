@@ -15,12 +15,8 @@ function srtToVtt(srt) {
   return "WEBVTT\n\n" + srt.replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, "$1.$2");
 }
 
-function toBase64(str) {
-  const bytes = new TextEncoder().encode(str);
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin);
-}
+function toBase64(str) { return btoa(unescape(encodeURIComponent(str))); }
+function fromBase64(str) { return decodeURIComponent(escape(atob(str))); }
 
 export default function RoomScreen({ route, navigation }) {
   const { roomCode, videoUrl, isOwner } = route.params;
@@ -83,8 +79,8 @@ export default function RoomScreen({ route, navigation }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ roomCode, fileName: file.name, content: toBase64(text) }),
         });
-        console.log("Upload response:", r.status);
-      } catch (e) { console.log("Upload failed:", e); }
+        if (!r.ok) Alert.alert("Upload failed", "Server returned " + r.status);
+      } catch (e) { Alert.alert("Upload error", e.message); }
     };
     input.click();
   }, [roomCode, applyTextTrack]);
@@ -116,8 +112,7 @@ export default function RoomScreen({ route, navigation }) {
     socket.on("subtitle-loaded", (data) => {
       console.log("subtitle-loaded received, fileName:", data.fileName, "content length:", data.content?.length);
       if (Platform.OS !== "web") return;
-      const bytes = Uint8Array.from(atob(data.content), (c) => c.charCodeAt(0));
-      const text = new TextDecoder().decode(bytes);
+      const text = fromBase64(data.content);
       console.log("Decoded text length:", text.length);
       applyTextTrack(text, data.fileName || "Subtitle");
     });
