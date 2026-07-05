@@ -34,7 +34,11 @@ export default function RoomScreen({ route, navigation }) {
     if (e.currentTime > 0) setDuration(player.duration || 0);
   });
 
-  const applyTrack = useCallback((url) => {
+  const API = "http://109.122.250.39:3001";
+
+  const applyTextTrack = useCallback((content, label) => {
+    const blob = new Blob([content], { type: "text/vtt" });
+    const url = URL.createObjectURL(blob);
     if (!videoContainerRef.current) return false;
     const video = videoContainerRef.current.querySelector("video");
     if (!video) return false;
@@ -44,21 +48,24 @@ export default function RoomScreen({ route, navigation }) {
     track.kind = "subtitles";
     track.src = url;
     track.srclang = "en";
-    track.label = "Subtitle";
+    track.label = label || "Subtitle";
     track.default = true;
     video.appendChild(track);
-    video.textTracks[0].mode = "showing";
-    setSubtitleUrl(url);
+    track.track.mode = "showing";
     setSubtitleOn(true);
     return true;
   }, []);
 
-  const API = "http://109.122.250.39:3001";
-
-  const loadExternalSubtitle = useCallback(() => {
+  const loadExternalSubtitle = useCallback(async () => {
     if (!subtitleUrl.trim()) return;
-    applyTrack(subtitleUrl.trim());
-  }, [subtitleUrl, applyTrack]);
+    try {
+      const res = await fetch(subtitleUrl.trim());
+      const text = await res.text();
+      applyTextTrack(text, subtitleUrl.trim());
+    } catch (_) {
+      Alert.alert("Error", "Failed to load subtitle");
+    }
+  }, [subtitleUrl, applyTextTrack]);
 
   const pickSubtitleFile = useCallback(async () => {
     if (Platform.OS !== "web") return;
@@ -68,26 +75,22 @@ export default function RoomScreen({ route, navigation }) {
     input.onchange = async (e) => {
       const file = e.target?.files?.[0];
       if (!file) return;
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const base64 = reader.result.split(",")[1];
-        try {
-          const res = await fetch(API + "/upload-subtitle", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ roomCode, fileName: file.name, content: base64 }),
-          });
-          const data = await res.json();
-          applyTrack(API + data.url);
-          setSubtitleUrl(file.name);
-        } catch (_) {
-          Alert.alert("Error", "Failed to upload subtitle");
-        }
-      };
-      reader.readAsDataURL(file);
+      const text = await file.text();
+      try {
+        const res = await fetch(API + "/upload-subtitle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ roomCode, fileName: file.name, content: btoa(text) }),
+        });
+        const data = await res.json();
+        applyTextTrack(text, file.name);
+        setSubtitleUrl(file.name);
+      } catch (_) {
+        Alert.alert("Error", "Failed to upload subtitle");
+      }
     };
     input.click();
-  }, [roomCode, applyTrack]);
+  }, [roomCode, applyTextTrack]);
 
   const autoDetectSubtitle = useCallback(async () => {
     const base = videoUrl.replace(/\.[^.]+$/, "");
@@ -98,11 +101,15 @@ export default function RoomScreen({ route, navigation }) {
     ];
     for (const url of candidates) {
       try {
-        const res = await fetch(url, { method: "HEAD" });
-        if (res.ok) { applyTrack(url); return; }
+        const res = await fetch(url);
+        if (res.ok) {
+          const text = await res.text();
+          applyTextTrack(text, url);
+          return;
+        }
       } catch (_) {}
     }
-  }, [videoUrl, applyTrack]);
+  }, [videoUrl, applyTextTrack]);
 
   useEffect(() => {
     if (status !== "readyToPlay") return;
@@ -141,8 +148,12 @@ export default function RoomScreen({ route, navigation }) {
       setIsPlaying(false);
     });
 
-    socket.on("subtitle-loaded", (url) => {
-      if (Platform.OS === "web") applyTrack(API + url);
+    socket.on("subtitle-loaded", (data) => {
+      if (Platform.OS !== "web") return;
+      const text = atob(data.content);
+      const title = data.fileName || "Subtitle";
+      applyTextTrack(text, title);
+      setSubtitleUrl(title);
     });
 
     socket.on("user-joined", () => {
@@ -215,7 +226,6 @@ export default function RoomScreen({ route, navigation }) {
           style={styles.video}
           nativeControls={false}
           contentFit="contain"
-          crossOrigin="anonymous"
         />
       </View>
 
@@ -253,11 +263,13 @@ export default function RoomScreen({ route, navigation }) {
             onPress={() => {
               if (subtitleOn) {
                 const v = videoContainerRef.current?.querySelector("video");
-                if (v && v.textTracks[0]) v.textTracks[0].mode = "hidden";
+                const t = v?.querySelector("track");
+                if (t) t.track.mode = "hidden";
                 setSubtitleOn(false);
               } else {
                 const v = videoContainerRef.current?.querySelector("video");
-                if (v && v.textTracks[0]) v.textTracks[0].mode = "showing";
+                const t = v?.querySelector("track");
+                if (t) t.track.mode = "showing";
                 else loadExternalSubtitle();
                 setSubtitleOn(true);
               }
