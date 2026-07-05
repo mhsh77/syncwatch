@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, Platform } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, Alert, Platform } from "react-native";
 import { useEvent, useEventListener } from "expo";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { connect, getSocket, disconnect } from "../services/socket";
@@ -11,12 +11,22 @@ function fmt(t) {
   return m + ":" + (s < 10 ? "0" : "") + s;
 }
 
+function srtToVtt(srt) {
+  return "WEBVTT\n\n" + srt.replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, "$1.$2");
+}
+
+function toBase64(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
 export default function RoomScreen({ route, navigation }) {
   const { roomCode, videoUrl, isOwner } = route.params;
   const videoViewRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isSyncing, setIsSyncing] = useState(true);
-  const [subtitleUrl, setSubtitleUrl] = useState("");
   const [subtitleOn, setSubtitleOn] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -36,11 +46,12 @@ export default function RoomScreen({ route, navigation }) {
 
   const API = "http://109.122.250.39:3001";
 
-  const applyTextTrack = useCallback((content, label) => {
-    const blob = new Blob([content], { type: "text/vtt" });
+  const applyTextTrack = useCallback((text, label) => {
+    console.log("applyTextTrack called, text length:", text.length, "label:", label);
+    let vtt = text.startsWith("WEBVTT") ? text : srtToVtt(text);
+    const blob = new Blob([vtt], { type: "text/vtt" });
     const url = URL.createObjectURL(blob);
-    if (!videoContainerRef.current) return false;
-    const video = videoContainerRef.current.querySelector("video");
+    const video = videoContainerRef.current?.querySelector("video");
     if (!video) return false;
     const existing = video.querySelector("track");
     if (existing) existing.remove();
@@ -49,25 +60,14 @@ export default function RoomScreen({ route, navigation }) {
     track.src = url;
     track.srclang = "en";
     track.label = label || "Subtitle";
-    track.default = true;
     video.appendChild(track);
-    track.track.mode = "showing";
+    const tt = track.track;
+    if (tt) tt.mode = "showing";
     setSubtitleOn(true);
     return true;
   }, []);
 
-  const loadExternalSubtitle = useCallback(async () => {
-    if (!subtitleUrl.trim()) return;
-    try {
-      const res = await fetch(subtitleUrl.trim());
-      const text = await res.text();
-      applyTextTrack(text, subtitleUrl.trim());
-    } catch (_) {
-      Alert.alert("Error", "Failed to load subtitle");
-    }
-  }, [subtitleUrl, applyTextTrack]);
-
-  const pickSubtitleFile = useCallback(async () => {
+  const pickSubtitleFile = useCallback(() => {
     if (Platform.OS !== "web") return;
     const input = document.createElement("input");
     input.type = "file";
@@ -76,57 +76,24 @@ export default function RoomScreen({ route, navigation }) {
       const file = e.target?.files?.[0];
       if (!file) return;
       const text = await file.text();
+      applyTextTrack(text, file.name);
       try {
-        const res = await fetch(API + "/upload-subtitle", {
+        const r = await fetch(API + "/upload-subtitle", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ roomCode, fileName: file.name, content: btoa(text) }),
+          body: JSON.stringify({ roomCode, fileName: file.name, content: toBase64(text) }),
         });
-        const data = await res.json();
-        applyTextTrack(text, file.name);
-        setSubtitleUrl(file.name);
-      } catch (_) {
-        Alert.alert("Error", "Failed to upload subtitle");
-      }
+        console.log("Upload response:", r.status);
+      } catch (e) { console.log("Upload failed:", e); }
     };
     input.click();
   }, [roomCode, applyTextTrack]);
 
-  const autoDetectSubtitle = useCallback(async () => {
-    const base = videoUrl.replace(/\.[^.]+$/, "");
-    const candidates = [
-      base + ".vtt", base + ".srt",
-      base + ".persian.srt", base + ".fa.srt",
-      base + "_fa.srt", base + ".en.srt",
-    ];
-    for (const url of candidates) {
-      try {
-        const res = await fetch(url);
-        if (res.ok) {
-          const text = await res.text();
-          applyTextTrack(text, url);
-          return;
-        }
-      } catch (_) {}
-    }
-  }, [videoUrl, applyTextTrack]);
-
-  useEffect(() => {
-    if (status !== "readyToPlay") return;
-    setSubtitleOn(false);
-    const timer = setInterval(() => {
-      if (videoContainerRef.current?.querySelector("video")) {
-        clearInterval(timer);
-        autoDetectSubtitle();
-      }
-    }, 200);
-    return () => clearInterval(timer);
-  }, [status]);
+  useEffect(() => { setSubtitleOn(false); }, [status]);
 
   useEffect(() => {
     const socket = connect();
     if (!socket) return;
-
     socket.emit("join-room", { roomCode });
 
     socket.on("sync-state", (state) => {
@@ -138,22 +105,21 @@ export default function RoomScreen({ route, navigation }) {
 
     socket.on("play", (position) => {
       if (position > 0) player.currentTime = position;
-      player.play();
-      setIsPlaying(true);
+      player.play(); setIsPlaying(true);
     });
 
     socket.on("pause", (position) => {
       if (position > 0) player.currentTime = position;
-      player.pause();
-      setIsPlaying(false);
+      player.pause(); setIsPlaying(false);
     });
 
     socket.on("subtitle-loaded", (data) => {
+      console.log("subtitle-loaded received, fileName:", data.fileName, "content length:", data.content?.length);
       if (Platform.OS !== "web") return;
-      const text = atob(data.content);
-      const title = data.fileName || "Subtitle";
-      applyTextTrack(text, title);
-      setSubtitleUrl(title);
+      const bytes = Uint8Array.from(atob(data.content), (c) => c.charCodeAt(0));
+      const text = new TextDecoder().decode(bytes);
+      console.log("Decoded text length:", text.length);
+      applyTextTrack(text, data.fileName || "Subtitle");
     });
 
     socket.on("user-joined", () => {
@@ -185,12 +151,10 @@ export default function RoomScreen({ route, navigation }) {
     const socket = getSocket();
     const pos = player.currentTime;
     if (isPlaying) {
-      player.pause();
-      setIsPlaying(false);
+      player.pause(); setIsPlaying(false);
       if (socket) socket.emit("pause", { roomCode, position: pos });
     } else {
-      player.play();
-      setIsPlaying(true);
+      player.play(); setIsPlaying(true);
       if (socket) socket.emit("play", { roomCode, position: pos });
     }
   }, [isPlaying, player, roomCode]);
@@ -261,17 +225,11 @@ export default function RoomScreen({ route, navigation }) {
           <TouchableOpacity
             style={[styles.ccButton, subtitleOn && styles.ccActive]}
             onPress={() => {
-              if (subtitleOn) {
-                const v = videoContainerRef.current?.querySelector("video");
-                const t = v?.querySelector("track");
-                if (t) t.track.mode = "hidden";
-                setSubtitleOn(false);
-              } else {
-                const v = videoContainerRef.current?.querySelector("video");
-                const t = v?.querySelector("track");
-                if (t) t.track.mode = "showing";
-                else loadExternalSubtitle();
-                setSubtitleOn(true);
+              const v = videoContainerRef.current?.querySelector("video");
+              const t = v?.querySelector("track");
+              if (t && t.track) {
+                t.track.mode = subtitleOn ? "hidden" : "showing";
+                setSubtitleOn(!subtitleOn);
               }
             }}
           >
@@ -279,26 +237,12 @@ export default function RoomScreen({ route, navigation }) {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.subtitleRow}>
-          <TextInput
-            style={styles.subtitleInput}
-            placeholder="Subtitle .vtt URL (optional)"
-            placeholderTextColor="#555"
-            value={subtitleUrl}
-            onChangeText={setSubtitleUrl}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          <TouchableOpacity style={styles.loadBtn} onPress={loadExternalSubtitle}>
-            <Text style={styles.loadBtnText}>Load</Text>
+        {isOwner && (
+          <TouchableOpacity style={styles.uploadBtn} onPress={pickSubtitleFile}>
+            <Text style={styles.uploadBtnText}>Upload Subtitle File (.vtt / .srt)</Text>
           </TouchableOpacity>
-        </View>
-        <TouchableOpacity style={styles.uploadBtn} onPress={pickSubtitleFile}>
-          <Text style={styles.uploadBtnText}>Upload Subtitle File</Text>
-        </TouchableOpacity>
+        )}
       </View>
-
-      <Text style={styles.hint}>Controls are synced — affects both viewers</Text>
     </View>
   );
 }
@@ -322,16 +266,13 @@ const styles = StyleSheet.create({
     flex: 1, height: 20, justifyContent: "center",
     backgroundColor: "transparent", position: "relative",
   },
-  seekFill: {
-    height: 4, backgroundColor: "#6C5CE7", borderRadius: 2,
-    position: "absolute", left: 0, top: 8,
-  },
+  seekFill: { height: 4, backgroundColor: "#6C5CE7", borderRadius: 2, position: "absolute", left: 0, top: 8 },
   seekThumb: {
     width: 14, height: 14, borderRadius: 7, backgroundColor: "#6C5CE7",
     position: "absolute", top: 3, marginLeft: -7,
   },
   controls: { paddingHorizontal: 20, paddingVertical: 10, alignItems: "center" },
-  controlsRow: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 10 },
+  controlsRow: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 12 },
   controlButton: { borderRadius: 30, paddingVertical: 12, paddingHorizontal: 40, alignItems: "center" },
   playButton: { backgroundColor: "#6C5CE7" },
   pauseButton: { backgroundColor: "#E17055" },
@@ -339,19 +280,10 @@ const styles = StyleSheet.create({
   ccButton: { borderRadius: 8, paddingVertical: 8, paddingHorizontal: 14, backgroundColor: "#333", alignItems: "center" },
   ccActive: { backgroundColor: "#6C5CE7" },
   ccText: { color: "#fff", fontSize: 14, fontWeight: "bold", letterSpacing: 1 },
-  subtitleRow: { flexDirection: "row", alignItems: "center", gap: 8, width: "100%" },
-  subtitleInput: {
-    flex: 1, backgroundColor: "#1a1a1a", color: "#ccc",
-    borderRadius: 8, padding: 10, fontSize: 13,
-    borderWidth: 1, borderColor: "#333",
-  },
-  loadBtn: { borderRadius: 8, paddingVertical: 10, paddingHorizontal: 16, backgroundColor: "#6C5CE7", alignItems: "center" },
-  loadBtnText: { color: "#fff", fontSize: 13, fontWeight: "bold" },
   uploadBtn: {
-    width: "100%", borderRadius: 8, paddingVertical: 10, marginTop: 8,
+    width: "100%", borderRadius: 8, paddingVertical: 12,
     backgroundColor: "#2d2d2d", borderWidth: 1, borderColor: "#555",
     borderStyle: "dashed", alignItems: "center",
   },
   uploadBtnText: { color: "#aaa", fontSize: 13 },
-  hint: { color: "#555", fontSize: 12, textAlign: "center", paddingBottom: 30 },
 });
